@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Radar AEMET - Córdoba</title>
+    <style>
+        :root {
+            --bg: #1a1a1a;
+            --card: #2d2d2d;
+            --text: #e0e0e0;
+            --accent: #3498db;
+        }
+        body {
+            font-family: system-ui, -apple-system, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            margin: 0;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        /* Cabecera compacta */
+        header {
+            width: 100%;
+            background: #000;
+            padding: 15px;
+            text-align: center;
+            border-bottom: 2px solid var(--accent);
+        }
+        h1 { margin: 0; font-size: 1.2rem; color: #fff; }
+        .subtitle { font-size: 0.8rem; color: #aaa; margin-top: 5px; }
+
+        /* Contenedor Principal */
+        .radar-container {
+            position: relative;
+            width: 100%;
+            max-width: 600px; /* Tamaño móvil óptimo */
+            aspect-ratio: 1/1; /* Cuadrado para radares */
+            background: #000;
+            margin: 20px 0;
+            overflow: hidden;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+
+        /* Imagen del Radar */
+        #radarImage {
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            display: block;
+        }
+
+        /* Overlay de información */
+        .info-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.7);
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-size: 0.8rem;
+            pointer-events: none;
+        }
+
+        /* Controles */
+        .controls {
+            width: 90%;
+            max-width: 600px;
+            display: grid;
+            gap: 10px;
+            padding: 10px;
+            background: var(--card);
+            border-radius: 10px;
+        }
+
+        input, select, button {
+            padding: 12px;
+            border-radius: 6px;
+            border: none;
+            font-size: 16px;
+        }
+        
+        input, select { background: #444; color: white; border: 1px solid #555; }
+        
+        button {
+            background-color: var(--accent);
+            color: white;
+            font-weight: bold;
+            text-transform: uppercase;
+            cursor: pointer;
+        }
+        button:active { transform: scale(0.98); }
+
+        /* Aviso de limitación */
+        .notice {
+            font-size: 0.75rem;
+            color: #aaa;
+            text-align: center;
+            padding: 15px;
+            max-width: 500px;
+        }
+
+        .loading {
+            position: absolute;
+            top: 50%; left: 50%;
+            transform: translate(-50%, -50%);
+            color: var(--accent);
+            font-weight: bold;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>Radar Meteorológico</h1>
+    <div class="subtitle">Córdoba / Sevilla (Tiempo Real)</div>
+</header>
+
+<!-- Visor Radar -->
+<div class="radar-container">
+    <div class="loading" id="loader">CARGANDO...</div>
+    <img id="radarImage" src="" alt="Esperando datos..." style="display:none;">
+    
+    <div class="info-overlay">
+        <span id="timestamp">--:--</span>
+        <br>
+        <span id="statusText" style="color:#aaa; font-size:0.7em">Esperando inicio...</span>
+    </div>
+</div>
+
+<!-- Controles -->
+<div class="controls">
+    <input type="password" id="apiKey" placeholder="Pega tu API Key AEMET aquí">
+    
+    <div style="display:grid; grid-template-columns: 1fr 1fr; gap:10px;">
+        <select id="radarSelector">
+            <option value="se" selected>Sevilla (Córdoba)</option>
+            <option value="ma">Málaga</option>
+            <option value="ba">Barcelona</option>
+            <option value="md">Madrid</option>
+            <option value="va">Valencia</option>
+        </select>
+        <button onclick="startMonitoring()" id="btnAction">Inciar Radar</button>
+    </div>
+</div>
+
+<div class="notice">
+    <strong>Nota Técnica:</strong> La API pública de AEMET solo entrega la imagen del <em>momento actual</em>.<br><br>
+    Esta app se actualizará sola cada minuto para mostrarte siempre lo último.
+</div>
+
+<script>
+    // Configuración
+    const minutos=1;
+    const REFRESH_INTERVAL = minutos * 60 * 1000; // 1 minutos (ciclo estándar radares AEMET)
+    let updateTimer = null;
+
+    // Cargar clave guardada
+    const savedKey = localStorage.getItem('aemet_api_key');
+    if(savedKey) document.getElementById('apiKey').value = savedKey;
+
+    async function startMonitoring() {
+        const apiKey = document.getElementById('apiKey').value.trim();
+        const radarCode = document.getElementById('radarSelector').value;
+
+        if (!apiKey) {
+            alert("Necesitas introducir la API Key.");
+            return;
+        }
+
+        // Guardar preferencias
+        localStorage.setItem('aemet_api_key', apiKey);
+        
+        // UI Feedback
+        const btn = document.getElementById('btnAction');
+        btn.textContent = "Actualizando...";
+        btn.disabled = true;
+
+        await fetchRadar(radarCode, apiKey);
+
+        // Configurar auto-refresco
+        if (updateTimer) clearInterval(updateTimer);
+        updateTimer = setInterval(() => {
+            fetchRadar(radarCode, apiKey);
+        }, REFRESH_INTERVAL);
+        
+        document.getElementById('statusText').textContent = "Auto-actualización: ACTIVA (10min)";
+        btn.textContent = "Actualizar Ahora";
+        btn.disabled = false;
+    }
+
+    async function fetchRadar(radarCode, apiKey) {
+        const loader = document.getElementById('loader');
+        const img = document.getElementById('radarImage');
+        const timeDisplay = document.getElementById('timestamp');
+        
+        loader.style.display = 'block';
+        img.style.opacity = '0.5';
+
+        try {
+            // 1. Solicitar URL de la imagen
+            // Endpoint: /api/red/radar/regional/{radar}
+            const res = await fetch(`https://opendata.aemet.es/opendata/api/red/radar/regional/${radarCode}?api_key=${apiKey}`);
+            
+            if(!res.ok) throw new Error("Error conexión API");
+            
+            const data = await res.json();
+            
+            if(data.estado === 401) throw new Error("API Key incorrecta");
+            if(data.datos) {
+                // 2. Cargar imagen
+                // Añadimos un parámetro random para burlar la caché del navegador y forzar imagen nueva
+                const imgUrl = data.datos; 
+                
+                // Precarga de imagen
+                const tempImg = new Image();
+                tempImg.onload = () => {
+                    img.src = imgUrl;
+                    img.style.display = 'block';
+                    img.style.opacity = '1';
+                    loader.style.display = 'none';
+                    
+                    // Actualizar hora de la captura
+                    const now = new Date();
+                    timeDisplay.textContent = now.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+                };
+                tempImg.onerror = () => {
+                   throw new Error("Fallo al cargar imagen");
+                }
+                tempImg.src = imgUrl;
+
+            } else {
+                throw new Error("No hay datos de imagen");
+            }
+
+        } catch (e) {
+            console.error(e);
+            loader.innerText = "ERROR: " + e.message;
+            img.style.opacity = '1';
+        }
+    }
+</script>
+
+</body>
+</html>
+
+
